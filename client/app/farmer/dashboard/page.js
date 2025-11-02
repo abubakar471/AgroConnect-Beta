@@ -19,7 +19,17 @@ import {
   AlertCircle,
   TrendingUp,
   Users
+  , Edit, Trash, Image as ImageIcon
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { Spinner } from '@/components/ui/spinner';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import { MoreVertical } from 'lucide-react';
 import { mockProducts, mockOrders, mockNotifications } from '@/lib/mockData';
 import { useUser, useAuth as useClerkAuth, UserButton } from '@clerk/nextjs';
 
@@ -33,6 +43,7 @@ export default function FarmerDashboard() {
   const [serverVerifications, setServerVerifications] = useState(null);
   const { isLoaded: clerkLoaded, isSignedIn: clerkSignedIn, getToken } = useClerkAuth();
 
+
   useEffect(() => {
     // Wait until AuthContext finishes initializing from localStorage
     if (!isAuthenticated && !currentUser) {
@@ -42,12 +53,54 @@ export default function FarmerDashboard() {
 
     if (!isAuthenticated) return router.replace('/signin');
     if (currentUser?.role !== 'farmer') return router.replace('/');
+    // Quickly seed UI with mock/demo data while we fetch real products
     const farmerProducts = mockProducts.filter(p => p.farmerId === currentUser.id || p.farmerId === currentUser.clerkId);
     const farmerOrders = mockOrders.filter(o => o.farmerId === currentUser.id || o.farmerId === currentUser.clerkId);
     const farmerNotifs = mockNotifications.filter(n => n.userId === currentUser.id || n.userId === currentUser.clerkId);
     setMyProducts(farmerProducts);
     setMyOrders(farmerOrders);
     setNotifications(farmerNotifs);
+
+    // If Clerk auth is available, fetch the farmer's products from server and normalize them
+    let mounted = true;
+    (async () => {
+      try {
+        if (clerkLoaded && clerkSignedIn && getToken) {
+          const token = await getToken();
+          const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + '/api/products/my';
+          const resp = await fetch(apiUrl, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            credentials: 'include'
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (!mounted) return;
+            // server returns an array of products (populated farmer)
+            const list = Array.isArray(data) ? data : (data.products || data);
+            const normalized = list.map(p => ({
+              id: p._id || p.id,
+              name: p.name,
+              batchCode: p.batchCode,
+              harvestDate: p.harvestDate,
+              description: p.description,
+              category: p.category,
+              availableUnits: p.availableUnits,
+              unit: p.unit,
+              pricePerUnit: p.pricePerUnit,
+              images: p.images || [],
+              shelfLife: p.shelfLife,
+              qualityGrade: p.qualityGrade,
+              adminVerified: p.adminVerified,
+              createdAt: p.createdAt,
+              updatedAt: p.updatedAt
+            }));
+            setMyProducts(normalized);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch my products', err);
+      }
+    })();
 
     // Simulate live notifications every 20s for demo
     const timer = setInterval(() => {
@@ -64,8 +117,123 @@ export default function FarmerDashboard() {
         ...prev,
       ]);
     }, 20000);
-    return () => clearInterval(timer);
+    return () => { mounted = false; clearInterval(timer); };
   }, [isAuthenticated, currentUser, router]);
+
+  // Edit / Delete state and handlers
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editFiles, setEditFiles] = useState([]);
+  const [editingUploading, setEditingUploading] = useState(false);
+
+  const handleEditClick = (product) => {
+    setEditingId(product.id);
+    setEditForm({
+      name: product.name || '',
+      batchCode: product.batchCode || '',
+      harvestDate: product.harvestDate ? new Date(product.harvestDate).toISOString().split('T')[0] : '',
+      description: product.description || '',
+      category: product.category || '',
+      availableUnits: product.availableUnits || 0,
+      unit: product.unit || 'kg',
+      pricePerUnit: product.pricePerUnit || 0,
+      shelfLife: product.shelfLife || '',
+      qualityGrade: product.qualityGrade || 'A',
+      images: product.images || []
+    });
+    setEditFiles([]);
+  };
+
+  const handleEditFileChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    setEditFiles(files.slice(0,5));
+  };
+
+  const handleRemoveExistingImage = (index) => {
+    setEditForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== index) }));
+  };
+
+  const handleSaveEdit = async (productId) => {
+    setEditingUploading(true);
+    try {
+      // upload new images to Cloudinary if provided
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME;
+      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_UPLOAD_PRESET;
+      const upload = async (file) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('upload_preset', uploadPreset);
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/upload`, { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error?.message || 'Cloudinary upload failed');
+        return data.secure_url;
+      };
+
+      // Start with remaining existing images (after any deletions performed in the edit form)
+      let images = editForm.images || [];
+      // If the user selected new files, upload and append them to existing images
+      if (editFiles.length > 0) {
+        const urls = [];
+        for (const f of editFiles) {
+          const u = await upload(f);
+          urls.push(u);
+        }
+        images = [...images, ...urls].slice(0, 5); // cap to 5
+      }
+
+      const payload = { ...editForm, images };
+
+      // include token
+      let headers = { 'Content-Type': 'application/json' };
+      try { if (clerkLoaded && clerkSignedIn && getToken) { const token = await getToken(); if (token) headers.Authorization = `Bearer ${token}`; } } catch (e) {}
+
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + `/api/products/${productId}`;
+      const resp = await fetch(apiUrl, { method: 'PUT', headers, credentials: 'include', body: JSON.stringify(payload) });
+      if (!resp.ok) throw new Error(await resp.text());
+      const updated = await resp.json();
+      const normalized = {
+        id: updated._id || updated.id,
+        name: updated.name,
+        batchCode: updated.batchCode,
+        harvestDate: updated.harvestDate,
+        description: updated.description,
+        category: updated.category,
+        availableUnits: updated.availableUnits,
+        unit: updated.unit,
+        pricePerUnit: updated.pricePerUnit,
+        images: updated.images || [],
+        shelfLife: updated.shelfLife,
+        qualityGrade: updated.qualityGrade,
+        adminVerified: updated.adminVerified,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt
+      };
+      setMyProducts(prev => prev.map(p => p.id === productId ? normalized : p));
+      toast.success('Product updated');
+      setEditingId(null);
+    } catch (err) {
+      console.error('update failed', err);
+      toast.error('Failed to update product');
+    } finally {
+      setEditingUploading(false);
+    }
+  };
+
+  const handleDelete = async (productId) => {
+    if (!confirm('Delete this product batch? This cannot be undone.')) return;
+    try {
+      let headers = {};
+      try { if (clerkLoaded && clerkSignedIn && getToken) { const token = await getToken(); if (token) headers.Authorization = `Bearer ${token}`; } } catch (e) {}
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + `/api/products/${productId}`;
+      const resp = await fetch(apiUrl, { method: 'DELETE', headers, credentials: 'include' });
+      if (!resp.ok) throw new Error(await resp.text());
+      setMyProducts(prev => prev.filter(p => p.id !== productId));
+      toast.success('Product deleted');
+    } catch (err) {
+      console.error('delete failed', err);
+      toast.error('Failed to delete product');
+    }
+  };
 
   // Fetch verification requests from server for the signed-in user (if Clerk available)
   useEffect(() => {
@@ -440,11 +608,11 @@ export default function FarmerDashboard() {
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {myProducts.map((product) => (
                   <Card key={product.id}>
                     <CardHeader>
-                      <div className="flex items-start justify-between">
+                      <div className="flex items-center justify-between">
                         <div>
                           <CardTitle>{product.name}</CardTitle>
                           <CardDescription>{product.batchCode}</CardDescription>
@@ -455,34 +623,114 @@ export default function FarmerDashboard() {
                             Verified
                           </Badge>
                         )}
+
+                        <div className="flex justify-end pt-2">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="p-2">
+                                  <MoreVertical className="w-5 h-5" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent>
+                                <DropdownMenuItem onClick={() => handleEditClick(product)}>
+                                  <Edit className="w-4 h-4 mr-2" /> Edit
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleDelete(product.id)} data-variant="destructive">
+                                  <Trash className="w-4 h-4 mr-2" /> Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                      <div className="aspect-video bg-gray-100 rounded-lg overflow-hidden">
-                        <div className="w-full h-full flex items-center justify-center text-gray-400">
-                          <Package className="w-12 h-12" />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div>
-                          <p className="text-gray-600">Available</p>
-                          <p className="font-medium">{product.availableUnits} {product.unit}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-600">Price</p>
-                          <p className="font-medium">৳{product.pricePerUnit}/{product.unit}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-600">Harvested</p>
-                          <p className="font-medium text-xs">
-                            {new Date(product.harvestDate).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-gray-600">Shelf Life</p>
-                          <p className="font-medium text-xs">{product.shelfLife}</p>
-                        </div>
-                      </div>
+                      {editingId === product.id ? (
+                        <form onSubmit={(e) => { e.preventDefault(); handleSaveEdit(product.id); }} className="space-y-3">
+                          <div>
+                            <label className="block text-sm text-gray-600">Product Name</label>
+                            <input className="w-full border rounded px-3 py-2 mt-1" value={editForm.name} onChange={(e) => setEditForm(prev => ({...prev, name: e.target.value}))} />
+                          </div>
+
+                          
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-sm text-gray-600">Available Units</label>
+                              <input type="number" className="w-full border rounded px-3 py-2 mt-1" value={editForm.availableUnits} onChange={(e) => setEditForm(prev => ({...prev, availableUnits: Number(e.target.value)}))} />
+                            </div>
+                            <div>
+                              <label className="block text-sm text-gray-600">Price per {editForm.unit || 'kg'}</label>
+                              <input type="number" className="w-full border rounded px-3 py-2 mt-1" value={editForm.pricePerUnit} onChange={(e) => setEditForm(prev => ({...prev, pricePerUnit: Number(e.target.value)}))} />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm text-gray-600">Shelf Life</label>
+                            <input className="w-full border rounded px-3 py-2 mt-1" value={editForm.shelfLife} onChange={(e) => setEditForm(prev => ({...prev, shelfLife: e.target.value}))} />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm text-gray-600">Description</label>
+                            <textarea rows={3} className="w-full border rounded px-3 py-2 mt-1" value={editForm.description} onChange={(e) => setEditForm(prev => ({...prev, description: e.target.value}))} />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm text-gray-600">Images</label>
+                            <div className="flex gap-2 flex-wrap mt-2">
+                              {(editForm.images || []).map((url, idx) => (
+                                <div key={idx} className="relative w-24 h-16 bg-gray-100 rounded overflow-hidden">
+                                  <img src={url} alt={`img-${idx}`} className="w-full h-full object-cover" />
+                                  <button type="button" onClick={() => handleRemoveExistingImage(idx)} className="absolute top-1 right-1 bg-black bg-opacity-50 text-white rounded-full p-1">
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="mt-2">
+                              <label className="block text-sm text-gray-600">Add Images (optional)</label>
+                              <input type="file" accept="image/*" multiple onChange={handleEditFileChange} className="mt-1" />
+                              <p className="text-xs text-gray-500 mt-1">You can remove existing images or add new ones. Max 5 images total.</p>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <Button type="button" variant="outline" onClick={() => setEditingId(null)} className="flex-1">Cancel</Button>
+                            <Button type="submit" className="flex-1 bg-green-600 hover:bg-green-700" disabled={editingUploading}>{editingUploading ? <Spinner className="w-4 h-4" /> : 'Save'}</Button>
+                          </div>
+                        </form>
+                      ) : (
+                        <>
+                          <div className="aspect-video bg-gray-100 rounded-lg overflow-hidden">
+                            {product.images && product.images.length > 0 ? (
+                              <img src={product.images[0]} alt={product.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-gray-400">
+                                <Package className="w-12 h-12" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div>
+                              <p className="text-gray-600">Available</p>
+                              <p className="font-medium">{product.availableUnits} {product.unit}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-600">Price</p>
+                              <p className="font-medium">৳{product.pricePerUnit}/{product.unit}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-600">Harvested</p>
+                              <p className="font-medium text-xs">{new Date(product.harvestDate).toLocaleDateString()}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-600">Shelf Life</p>
+                              <p className="font-medium text-xs">{product.shelfLife}</p>
+                            </div>
+                          </div>
+
+                          
+                        </>
+                      )}
                     </CardContent>
                   </Card>
                 ))}

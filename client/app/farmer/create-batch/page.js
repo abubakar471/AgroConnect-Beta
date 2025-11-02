@@ -11,6 +11,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowLeft, Upload, CheckCircle, Image as ImageIcon, Calendar } from 'lucide-react';
+import { toast } from 'sonner';
+import { Spinner } from '@/components/ui/spinner';
 
 export default function CreateBatchPage() {
   const router = useRouter();
@@ -29,6 +31,7 @@ export default function CreateBatchPage() {
   });
   const [images, setImages] = useState([]);
   const [submitted, setSubmitted] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [hasPending, setHasPending] = useState(false);
   const { isLoaded: clerkLoaded, isSignedIn: clerkSignedIn, getToken } = useClerkAuth();
 
@@ -104,13 +107,77 @@ export default function CreateBatchPage() {
     setImages(prev => [...prev, ...files].slice(0, 5)); // Max 5 images
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    // Simulate submission
-    setTimeout(() => {
+    if (images.length === 0) return toast.error('Please upload at least one image');
+    setUploading(true);
+    try {
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME;
+      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_UPLOAD_PRESET;
+
+      const upload = async (file) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('upload_preset', uploadPreset);
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/upload`, {
+          method: 'POST',
+          body: fd
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error?.message || 'Cloudinary upload failed');
+        return data.secure_url;
+      };
+
+      const imageUrls = [];
+      for (const file of images) {
+        const url = await upload(file);
+        imageUrls.push(url);
+      }
+
+      const payload = {
+        name: formData.name,
+        batchCode: formData.batchCode,
+        harvestDate: formData.harvestDate,
+        description: formData.description,
+        category: formData.category,
+        availableUnits: Number(formData.availableUnits),
+        unit: formData.unit,
+        pricePerUnit: Number(formData.pricePerUnit),
+        images: imageUrls,
+        shelfLife: formData.shelfLife,
+        qualityGrade: formData.qualityGrade
+      };
+
+      // include Clerk token when available
+      let headers = { 'Content-Type': 'application/json' };
+      try {
+        if (clerkLoaded && clerkSignedIn && getToken) {
+          const token = await getToken();
+          if (token) headers.Authorization = `Bearer ${token}`;
+        }
+      } catch (e) {}
+
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + '/api/products';
+      const resp = await fetch(apiUrl, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || 'Failed to create product');
+      }
+
       setSubmitted(true);
-    }, 1000);
+      toast.success('Product batch created successfully');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to create batch. ' + (err.message || ''));
+    } finally {
+      setUploading(false);
+    }
   };
 
   if (submitted) {
@@ -399,10 +466,10 @@ export default function CreateBatchPage() {
             <Button
               type="submit"
               className="flex-1 bg-green-600 hover:bg-green-700"
-              disabled={images.length === 0}
+              disabled={images.length === 0 || uploading}
             >
-              <Upload className="w-4 h-4 mr-2" />
-              Create Batch
+              {uploading ? <Spinner className="w-4 h-4 mr-2 text-white" /> : <Upload className="w-4 h-4 mr-2" />}
+              {uploading ? 'Creating...' : 'Create Batch'}
             </Button>
           </div>
         </form>
