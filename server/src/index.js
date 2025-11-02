@@ -21,6 +21,12 @@ app.use(morgan('dev'));
 
 // Health
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Temporary debug route to verify server routing for verification endpoints (no auth)
+// Remove once troubleshooting is complete.
+app.get('/api/debug/verification', (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
  
 
 // Routes

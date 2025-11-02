@@ -25,7 +25,7 @@ import { useUser, useAuth as useClerkAuth, UserButton } from '@clerk/nextjs';
 
 export default function FarmerDashboard() {
   const { user } = useUser();
-  const { currentUser, isAuthenticated, logout } = useAuth();
+  const { currentUser, isAuthenticated, logout, updateUser } = useAuth();
   const router = useRouter();
   const [notifications, setNotifications] = useState([]);
   const [myProducts, setMyProducts] = useState([]);
@@ -88,6 +88,17 @@ export default function FarmerDashboard() {
         const data = await resp.json();
         if (!mounted) return;
         setServerVerifications(data);
+        // If admin approved the verification on the server, reflect that in local user state
+        try {
+          const list = (data && data.verifications) ? data.verifications : [];
+          const approved = list.find(v => v && v.status === 'approved');
+          if (approved) {
+            // mark user as verified locally
+            updateUser({ verified: true, verificationStatus: 'approved' });
+          }
+        } catch (e) {
+          // ignore
+        }
       } catch (err) {
         console.error('Failed to fetch server verifications', err);
       }
@@ -147,6 +158,14 @@ export default function FarmerDashboard() {
     .filter(o => o.status === 'completed')
     .reduce((sum, o) => sum + o.totalAmount, 0);
 
+  // Determine if there is a pending verification for this farmer (prefer server data)
+  const serverList = (serverVerifications && serverVerifications.verifications) ? serverVerifications.verifications : [];
+  const serverPending = serverList.find(v => v && v.status === 'pending');
+  const localVerifications = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('agroconnect_verifications') || '[]') : [];
+  const localPending = localVerifications.find(v => (v.farmerId === currentUser?.id || v.farmerId === currentUser?.clerkId) && v.status === 'pending');
+  const myPending = serverPending || localPending;
+  const hasPending = !!myPending;
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -160,14 +179,19 @@ export default function FarmerDashboard() {
               <p className="text-sm text-gray-600">Welcome back, {currentUser.name}</p>
             </div>
             <div className="flex items-center gap-4">
-              {!currentUser.verified && (
+              {currentUser.verified && !hasPending ? (
+                <Badge variant="default" className="bg-green-600/10 text-green-500 flex items-center gap-2 py-2">
+                  <CheckCircle className="w-6 h-6" />
+                  Verified
+                </Badge>
+              ) : (
                 <Button
                   onClick={() => router.push('/farmer/verification')}
                   variant="outline"
                   className="border-orange-500 text-orange-600 hover:bg-orange-50"
                 >
                   <AlertCircle className="w-4 h-4 mr-2" />
-                  Get Verified
+                  {hasPending ? 'Update Verification' : 'Get Verified'}
                 </Button>
               )}
               <Button variant="ghost" size="icon" className="relative">
@@ -185,14 +209,8 @@ export default function FarmerDashboard() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {/* Verification Status Alert */}
-        {(!currentUser.verified) && (() => {
-          // detect pending verification from server (preferred) or local fallback
-          const localVerifications = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('agroconnect_verifications') || '[]') : [];
-          const serverList = (serverVerifications && serverVerifications.verifications) ? serverVerifications.verifications : [];
-          const serverPending = serverList.find(v => v && v.status === 'pending');
-          const myPending = serverPending || localVerifications.find(v => (v.farmerId === currentUser?.id || v.farmerId === currentUser?.clerkId) && v.status === 'pending');
-          const isPending = currentUser?.verificationStatus === 'pending' || !!myPending;
-
+        {(() => {
+          const isPending = currentUser?.verificationStatus === 'pending' || hasPending;
           if (isPending) {
             return (
               <Card className="border-yellow-200 bg-yellow-50">
@@ -204,29 +222,6 @@ export default function FarmerDashboard() {
                       <p className="text-sm text-yellow-700 mt-1">
                         Your verification request is pending review by our admin team. You'll be notified once it's reviewed.
                       </p>
-
-                      {/* {myPending && (
-                        <div className="mt-3 grid grid-cols-3 gap-3">
-                          {myPending.nidFrontUrl && (
-                            <a href={myPending.nidFrontUrl} target="_blank" rel="noreferrer" className="block">
-                              <img src={myPending.nidFrontUrl} alt="NID front" className="w-full h-24 object-cover rounded" />
-                              <p className="text-xs text-gray-500 mt-1">NID front</p>
-                            </a>
-                          )}
-                          {myPending.nidBackUrl && (
-                            <a href={myPending.nidBackUrl} target="_blank" rel="noreferrer" className="block">
-                              <img src={myPending.nidBackUrl} alt="NID back" className="w-full h-24 object-cover rounded" />
-                              <p className="text-xs text-gray-500 mt-1">NID back</p>
-                            </a>
-                          )}
-                          {myPending.farmVideoUrl && (
-                            <a href={myPending.farmVideoUrl} target="_blank" rel="noreferrer" className="block">
-                              <div className="w-full h-24 bg-black rounded flex items-center justify-center text-white">View Video</div>
-                              <p className="text-xs text-gray-500 mt-1">Farm video</p>
-                            </a>
-                          )}
-                        </div>
-                      )} */}
 
                       <div className="mt-3 flex gap-3">
                         <Button
@@ -249,27 +244,31 @@ export default function FarmerDashboard() {
             );
           }
 
-          return (
-            <Card className="border-orange-200 bg-orange-50">
-              <CardContent className="pt-6">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-orange-900">Verification Required</h3>
-                    <p className="text-sm text-orange-700 mt-1">
-                      You need to verify your account before you can list products. Upload your NID and a short farm video to get started.
-                    </p>
-                    <Button
-                      className="mt-3 bg-orange-600 hover:bg-orange-700"
-                      onClick={() => router.push('/farmer/verification')}
-                    >
-                      Start Verification
-                    </Button>
+          if (!currentUser.verified) {
+            return (
+              <Card className="border-orange-200 bg-orange-50">
+                <CardContent className="pt-6">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-orange-900">Verification Required</h3>
+                      <p className="text-sm text-orange-700 mt-1">
+                        You need to verify your account before you can list products. Upload your NID and a short farm video to get started.
+                      </p>
+                      <Button
+                        className="mt-3 bg-orange-600 hover:bg-orange-700"
+                        onClick={() => router.push('/farmer/verification')}
+                      >
+                        Start Verification
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          );
+                </CardContent>
+              </Card>
+            );
+          }
+
+          return null;
         })()}
 
         {/* Stats Cards */}
@@ -414,7 +413,7 @@ export default function FarmerDashboard() {
           <TabsContent value="products" className="space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-lg font-semibold">My Product Batches</h3>
-              {currentUser.verified && (
+              {currentUser.verified && !hasPending && (
                 <Button
                   className="bg-green-600 hover:bg-green-700"
                   onClick={() => router.push('/farmer/create-batch')}
@@ -430,7 +429,7 @@ export default function FarmerDashboard() {
                 <CardContent className="py-12 text-center">
                   <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                   <p className="text-gray-500 mb-3">No products listed yet</p>
-                  {currentUser.verified && (
+                  {currentUser.verified && !hasPending && (
                     <Button
                       onClick={() => router.push('/farmer/create-batch')}
                       className="bg-green-600 hover:bg-green-700"

@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAuth as useClerkAuth } from '@clerk/nextjs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,8 +29,44 @@ export default function CreateBatchPage() {
   });
   const [images, setImages] = useState([]);
   const [submitted, setSubmitted] = useState(false);
+  const [hasPending, setHasPending] = useState(false);
+  const { isLoaded: clerkLoaded, isSignedIn: clerkSignedIn, getToken } = useClerkAuth();
 
-  if (!currentUser?.verified) {
+  // Fetch server verifications (preferred) to detect pending requests
+  useEffect(() => {
+    if (!clerkLoaded) return;
+    if (!clerkSignedIn) return;
+    let mounted = true;
+    (async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + '/api/users/verification';
+        const resp = await fetch(apiUrl, { headers: { Authorization: `Bearer ${token}` }, credentials: 'include' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!mounted) return;
+        const list = (data && data.verifications) ? data.verifications : [];
+        const serverPending = list.find(v => v && v.status === 'pending');
+        if (serverPending) setHasPending(true);
+      } catch (err) {
+        // fallback to localStorage check below
+        console.error('fetch verifications error', err);
+      }
+    })();
+
+    // fallback: check localStorage for demo mode
+    try {
+      const localVerifications = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('agroconnect_verifications') || '[]') : [];
+      const localPending = localVerifications.find(v => (v.farmerId === currentUser?.id || v.farmerId === currentUser?.clerkId) && v.status === 'pending');
+      if (localPending) setHasPending(true);
+    } catch (e) {}
+
+    return () => { mounted = false; };
+  }, [clerkLoaded, clerkSignedIn, currentUser, getToken]);
+
+  // block access if user not verified OR has a pending verification
+  if (!currentUser?.verified || hasPending) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
