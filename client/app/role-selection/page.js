@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAuth as useClerkAuth } from '@clerk/nextjs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,9 +16,14 @@ export default function RoleSelectionPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const { isAuthenticated, currentUser, selectRole } = useAuth();
+  const { isLoaded: clerkLoaded, isSignedIn: clerkSignedIn, getToken } = useClerkAuth();
 
   useEffect(() => {
+    // Don't auto-redirect away while the user is on the role selection page
     if (isAuthenticated && currentUser && currentUser.role) {
+      try {
+        if (typeof window !== 'undefined' && window.location.pathname === '/role-selection') return;
+      } catch (e) {}
       router.replace('/');
     }
   }, [isAuthenticated, currentUser, router]);
@@ -32,8 +38,34 @@ export default function RoleSelectionPage() {
     let phone = '';
     try { phone = saved ? JSON.parse(saved).phone : ''; } catch {}
     const user = selectRole(phone || '+880 1000-000000', selectedRole, name);
+    // Try to inform backend (if running). If Clerk is signed-in include token; otherwise attempt without auth and ignore errors.
+    (async () => {
+      try {
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + '/api/users/role';
+        let headers = { 'Content-Type': 'application/json' };
+        // If Clerk is available and signed-in, include Authorization header
+        try {
+          if (clerkLoaded && clerkSignedIn && getToken) {
+            const token = await getToken();
+            if (token) headers.Authorization = `Bearer ${token}`;
+          }
+        } catch (err) {
+          // ignore clerk errors in environments without Clerk
+        }
+
+        await fetch(apiUrl, {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({ role: selectedRole, name })
+        });
+      } catch (e) {
+        // ignore network/backend errors for mock flow
+      }
+    })();
+
     setLoading(false);
-    if (user.role === 'farmer') router.replace('/farmer/dashboard');
+    if (user.role === 'farmer') router.replace('/farmer/verification');
     else router.replace('/buyer/dashboard');
   };
 

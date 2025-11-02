@@ -66,7 +66,7 @@ export default function Home() {
             <Button
               size="lg"
               className="bg-green-600 hover:bg-green-700 text-lg h-14 px-8"
-              onClick={() => router.push('/login')}
+              onClick={() => router.push('/signin')}
             >
               Get Started
             </Button>
@@ -175,7 +175,7 @@ export default function Home() {
           <Button
             size="lg"
             className="bg-white text-green-600 hover:bg-gray-100 text-lg h-14 px-8"
-            onClick={() => router.push('/login')}
+            onClick={() => router.push('/signin')}
           >
             Start Now - It's Free
           </Button>

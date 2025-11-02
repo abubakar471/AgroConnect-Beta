@@ -5,6 +5,7 @@ const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const { connectDB } = require('./lib/db');
 const authRoutes = require('./routes/auth');
+const dataRoutes = require('./routes/data');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -20,9 +21,11 @@ app.use(morgan('dev'));
 
 // Health
 app.get('/health', (req, res) => res.json({ ok: true }));
+ 
 
 // Routes
 app.use('/api/users', authRoutes);
+app.use('/api', dataRoutes);
 
 // Start
 connectDB()

@@ -5,6 +5,7 @@ const UserSchema = new Schema(
     clerkId: { type: String, required: true, unique: true },
     role: { type: String, enum: ['farmer', 'buyer', 'admin'], default: null },
     verified: { type: Boolean, default: false },
+    banned: { type: Boolean, default: false },
     name: String,
     phone: String,
     location: String,

@@ -8,6 +8,7 @@ const AuthContext = createContext();
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [initialized, setInitialized] = useState(false);
 
   // Simulate getting current user from localStorage on mount
   useEffect(() => {
@@ -17,6 +18,8 @@ export function AuthProvider({ children }) {
       setCurrentUser(user);
       setIsAuthenticated(true);
     }
+    // Mark that we've finished the initial load from localStorage
+    setInitialized(true);
   }, []);
 
   const login = (phone) => {
@@ -35,6 +38,13 @@ export function AuthProvider({ children }) {
     
     // New user - needs to select role
     return { success: true, user: null, isNewUser: true, phone };
+  };
+
+  const setUser = (user) => {
+    setCurrentUser(user);
+    setIsAuthenticated(!!user);
+    if (user) localStorage.setItem('agroconnect_user', JSON.stringify(user));
+    else localStorage.removeItem('agroconnect_user');
   };
 
   const selectRole = (phone, role, name) => {
@@ -73,9 +83,11 @@ export function AuthProvider({ children }) {
       value={{
         currentUser,
         isAuthenticated,
+        initialized,
         login,
         logout,
         selectRole,
+        setUser,
         updateUser
       }}
     >

@@ -7,12 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { 
-  Bell, 
-  Package, 
-  ShoppingBag, 
-  CheckCircle, 
-  XCircle, 
+import {
+  Bell,
+  Package,
+  ShoppingBag,
+  CheckCircle,
+  XCircle,
   Clock,
   Plus,
   LogOut,
@@ -21,16 +21,26 @@ import {
   Users
 } from 'lucide-react';
 import { mockProducts, mockOrders, mockNotifications } from '@/lib/mockData';
+import { useUser, useAuth as useClerkAuth, UserButton } from '@clerk/nextjs';
 
 export default function FarmerDashboard() {
-  const { isAuthenticated, currentUser, logout } = useAuth();
+  const { user } = useUser();
+  const { currentUser, isAuthenticated, logout } = useAuth();
   const router = useRouter();
   const [notifications, setNotifications] = useState([]);
   const [myProducts, setMyProducts] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
+  const [serverVerifications, setServerVerifications] = useState(null);
+  const { isLoaded: clerkLoaded, isSignedIn: clerkSignedIn, getToken } = useClerkAuth();
 
   useEffect(() => {
-    if (!isAuthenticated) return router.replace('/login');
+    // Wait until AuthContext finishes initializing from localStorage
+    if (!isAuthenticated && !currentUser) {
+      // if AuthContext hasn't initialized yet, don't redirect — let it finish
+      return;
+    }
+
+    if (!isAuthenticated) return router.replace('/signin');
     if (currentUser?.role !== 'farmer') return router.replace('/');
     const farmerProducts = mockProducts.filter(p => p.farmerId === currentUser.id || p.farmerId === currentUser.clerkId);
     const farmerOrders = mockOrders.filter(o => o.farmerId === currentUser.id || o.farmerId === currentUser.clerkId);
@@ -57,9 +67,37 @@ export default function FarmerDashboard() {
     return () => clearInterval(timer);
   }, [isAuthenticated, currentUser, router]);
 
+  // Fetch verification requests from server for the signed-in user (if Clerk available)
+  useEffect(() => {
+    if (!clerkLoaded) return;
+    if (!clerkSignedIn) return;
+    let mounted = true;
+    (async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001') + '/api/users/verification';
+        const resp = await fetch(apiUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include'
+        });
+        if (!resp.ok) {
+          // ignore server errors
+          return;
+        }
+        const data = await resp.json();
+        if (!mounted) return;
+        setServerVerifications(data);
+      } catch (err) {
+        console.error('Failed to fetch server verifications', err);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [clerkLoaded, clerkSignedIn]);
+
   const handleLogout = () => {
     logout();
-    router.replace('/login');
+    router.replace('/signin');
   };
 
   const handleAcceptOrder = (orderId) => {
@@ -91,7 +129,7 @@ export default function FarmerDashboard() {
     };
 
     const { variant, label, icon: Icon } = config[status] || config.pending;
-    
+
     return (
       <Badge variant={variant} className="gap-1">
         <Icon className="w-3 h-3" />
@@ -138,10 +176,8 @@ export default function FarmerDashboard() {
                   <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
                 )}
               </Button>
-              <Button variant="ghost" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
+
+              <UserButton />
             </div>
           </div>
         </div>
@@ -149,28 +185,92 @@ export default function FarmerDashboard() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {/* Verification Status Alert */}
-        {!currentUser.verified && (
-          <Card className="border-orange-200 bg-orange-50">
-            <CardContent className="pt-6">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5" />
-                <div className="flex-1">
-                  <h3 className="font-semibold text-orange-900">Verification Required</h3>
-                  <p className="text-sm text-orange-700 mt-1">
-                    You need to verify your account before you can list products. 
-                    Upload your NID and farm video to get started.
-                  </p>
-                  <Button
-                    className="mt-3 bg-orange-600 hover:bg-orange-700"
-                    onClick={() => router.push('/farmer/verification')}
-                  >
-                    Start Verification
-                  </Button>
+        {(!currentUser.verified) && (() => {
+          // detect pending verification from server (preferred) or local fallback
+          const localVerifications = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('agroconnect_verifications') || '[]') : [];
+          const serverList = (serverVerifications && serverVerifications.verifications) ? serverVerifications.verifications : [];
+          const serverPending = serverList.find(v => v && v.status === 'pending');
+          const myPending = serverPending || localVerifications.find(v => (v.farmerId === currentUser?.id || v.farmerId === currentUser?.clerkId) && v.status === 'pending');
+          const isPending = currentUser?.verificationStatus === 'pending' || !!myPending;
+
+          if (isPending) {
+            return (
+              <Card className="border-yellow-200 bg-yellow-50">
+                <CardContent className="pt-6">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-yellow-900">Verification Pending</h3>
+                      <p className="text-sm text-yellow-700 mt-1">
+                        Your verification request is pending review by our admin team. You'll be notified once it's reviewed.
+                      </p>
+
+                      {/* {myPending && (
+                        <div className="mt-3 grid grid-cols-3 gap-3">
+                          {myPending.nidFrontUrl && (
+                            <a href={myPending.nidFrontUrl} target="_blank" rel="noreferrer" className="block">
+                              <img src={myPending.nidFrontUrl} alt="NID front" className="w-full h-24 object-cover rounded" />
+                              <p className="text-xs text-gray-500 mt-1">NID front</p>
+                            </a>
+                          )}
+                          {myPending.nidBackUrl && (
+                            <a href={myPending.nidBackUrl} target="_blank" rel="noreferrer" className="block">
+                              <img src={myPending.nidBackUrl} alt="NID back" className="w-full h-24 object-cover rounded" />
+                              <p className="text-xs text-gray-500 mt-1">NID back</p>
+                            </a>
+                          )}
+                          {myPending.farmVideoUrl && (
+                            <a href={myPending.farmVideoUrl} target="_blank" rel="noreferrer" className="block">
+                              <div className="w-full h-24 bg-black rounded flex items-center justify-center text-white">View Video</div>
+                              <p className="text-xs text-gray-500 mt-1">Farm video</p>
+                            </a>
+                          )}
+                        </div>
+                      )} */}
+
+                      <div className="mt-3 flex gap-3">
+                        <Button
+                          className="bg-yellow-600 hover:bg-yellow-700"
+                          onClick={() => router.push('/farmer/verification')}
+                        >
+                          Update Verification
+                        </Button>
+                        <Button variant="outline" onClick={() => {
+                          // allow farmer to resubmit by navigating to verification page
+                          router.push('/farmer/verification');
+                        }}>
+                          View Details
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          }
+
+          return (
+            <Card className="border-orange-200 bg-orange-50">
+              <CardContent className="pt-6">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-orange-900">Verification Required</h3>
+                    <p className="text-sm text-orange-700 mt-1">
+                      You need to verify your account before you can list products. Upload your NID and a short farm video to get started.
+                    </p>
+                    <Button
+                      className="mt-3 bg-orange-600 hover:bg-orange-700"
+                      onClick={() => router.push('/farmer/verification')}
+                    >
+                      Start Verification
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* Stats Cards */}
         <div className="grid md:grid-cols-4 gap-4">

@@ -23,6 +23,7 @@ import {
   Eye
 } from 'lucide-react';
 import { mockProducts, mockOrders, mockNotifications } from '@/lib/mockData';
+import { UserButton } from '@clerk/nextjs';
 
 export default function BuyerDashboard() {
   const { isAuthenticated, currentUser, logout } = useAuth();
@@ -117,16 +118,28 @@ export default function BuyerDashboard() {
                   <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
                 )}
               </Button>
-              <Button variant="ghost" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
+
+              <UserButton />
             </div>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+        {/* Onboarding notice for incomplete buyer profiles */}
+        {currentUser && currentUser.role === 'buyer' && (!currentUser.name || !currentUser.phone || !currentUser.location) && (
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-semibold">Complete your profile</p>
+                <p className="text-sm text-gray-600">Please provide your name, phone and location to access the marketplace.</p>
+              </div>
+              <div>
+                <Button className="bg-yellow-400 hover:bg-yellow-500" onClick={() => router.push('/buyer/onboard')}>Complete Profile</Button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* Stats Cards */}
         <div className="grid md:grid-cols-4 gap-4">
           <Card>
